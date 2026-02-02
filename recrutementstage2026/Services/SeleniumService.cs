@@ -9,8 +9,7 @@
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
-using WebDriverManager;
-using WebDriverManager.DriverConfigs.Impl;
+using System.Diagnostics;
 #endif
 
 namespace recrutementstage2026.Services;
@@ -46,6 +45,11 @@ public class SeleniumService : IDisposable
     public string VilleParDefaut { get; set; } = "Paris";
 
     /// <summary>
+    /// Chemin vers ChromeDriver (laissez vide pour recherche automatique).
+    /// </summary>
+    public string? CheminChromeDriver { get; set; } = null;
+
+    /// <summary>
     /// Ajoute un message au journal.
     /// </summary>
     private void Log(string message)
@@ -54,6 +58,65 @@ public class SeleniumService : IDisposable
         var logMessage = $"[{timestamp}] {message}";
         _logs.Add(logMessage);
         OnLog?.Invoke(logMessage);
+    }
+
+    /// <summary>
+    /// Cherche ChromeDriver dans les emplacements courants.
+    /// </summary>
+    private string? TrouverChromeDriver()
+    {
+        // Liste des emplacements possibles pour ChromeDriver
+        var emplacements = new List<string>
+        {
+            // Dossier de l'application
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "chromedriver.exe"),
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Drivers", "chromedriver.exe"),
+
+            // Dossier courant
+            "chromedriver.exe",
+            Path.Combine("Drivers", "chromedriver.exe"),
+
+            // Dossier utilisateur
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "chromedriver.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Drivers", "chromedriver.exe"),
+
+            // Program Files
+            @"C:\Program Files\chromedriver.exe",
+            @"C:\Program Files (x86)\chromedriver.exe",
+            @"C:\chromedriver\chromedriver.exe",
+            @"C:\Selenium\chromedriver.exe",
+            @"C:\Tools\chromedriver.exe",
+
+            // Downloads
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "chromedriver.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "chromedriver-win64", "chromedriver.exe"),
+        };
+
+        foreach (var chemin in emplacements)
+        {
+            if (File.Exists(chemin))
+            {
+                Log($"ChromeDriver trouvé : {chemin}");
+                return Path.GetDirectoryName(chemin);
+            }
+        }
+
+        // Chercher dans le PATH
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (pathEnv != null)
+        {
+            foreach (var dir in pathEnv.Split(';'))
+            {
+                var chemin = Path.Combine(dir, "chromedriver.exe");
+                if (File.Exists(chemin))
+                {
+                    Log($"ChromeDriver trouvé dans PATH : {chemin}");
+                    return dir;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -70,23 +133,75 @@ public class SeleniumService : IDisposable
             {
                 Log("Initialisation du navigateur Chrome...");
 
-                // Installation automatique du driver Chrome
-                new DriverManager().SetUpDriver(new ChromeConfig());
-
                 // Configuration du navigateur
                 var options = new ChromeOptions();
                 options.AddArgument("--start-maximized");
                 options.AddArgument("--disable-notifications");
                 options.AddArgument("--disable-popup-blocking");
+                options.AddArgument("--no-sandbox");
+                options.AddArgument("--disable-dev-shm-usage");
                 options.AddExcludedArgument("enable-logging");
+                options.AddExcludedArgument("enable-automation");
+                options.AddArgument("--disable-blink-features=AutomationControlled");
 
-                _driver = new ChromeDriver(options);
+                // Trouver ChromeDriver
+                string? cheminDriver = CheminChromeDriver ?? TrouverChromeDriver();
+
+                if (cheminDriver != null)
+                {
+                    Log($"Utilisation du driver : {cheminDriver}");
+                    var service = ChromeDriverService.CreateDefaultService(cheminDriver);
+                    service.HideCommandPromptWindow = true;
+                    service.SuppressInitialDiagnosticInformation = true;
+                    _driver = new ChromeDriver(service, options);
+                }
+                else
+                {
+                    // Essayer sans chemin spécifique (utilise le PATH système)
+                    Log("Recherche de ChromeDriver dans le PATH système...");
+                    try
+                    {
+                        var service = ChromeDriverService.CreateDefaultService();
+                        service.HideCommandPromptWindow = true;
+                        service.SuppressInitialDiagnosticInformation = true;
+                        _driver = new ChromeDriver(service, options);
+                    }
+                    catch
+                    {
+                        Log("===========================================");
+                        Log("ERREUR : ChromeDriver non trouvé !");
+                        Log("===========================================");
+                        Log("Pour résoudre ce problème :");
+                        Log("1. Téléchargez ChromeDriver sur :");
+                        Log("   https://googlechromelabs.github.io/chrome-for-testing/");
+                        Log("2. Choisissez la version correspondant à votre Chrome");
+                        Log("3. Extrayez chromedriver.exe dans :");
+                        Log($"   {AppDomain.CurrentDomain.BaseDirectory}");
+                        Log("4. Relancez l'application");
+                        Log("===========================================");
+                        return false;
+                    }
+                }
+
                 Log("Navigateur initialisé avec succès !");
                 return true;
             }
             catch (Exception ex)
             {
                 Log($"Erreur d'initialisation : {ex.Message}");
+
+                if (ex.Message.Contains("cannot find Chrome binary"))
+                {
+                    Log("Google Chrome n'est pas installé ou introuvable.");
+                    Log("Installez Chrome depuis : https://www.google.com/chrome/");
+                }
+                else if (ex.Message.Contains("session not created"))
+                {
+                    Log("Version de ChromeDriver incompatible avec Chrome.");
+                    Log("Téléchargez la bonne version sur :");
+                    Log("https://googlechromelabs.github.io/chrome-for-testing/");
+                }
+
                 return false;
             }
         });
@@ -99,8 +214,18 @@ public class SeleniumService : IDisposable
     {
         if (_driver != null)
         {
-            _driver.Quit();
-            _driver.Dispose();
+            try
+            {
+                _driver.Quit();
+            }
+            catch { }
+
+            try
+            {
+                _driver.Dispose();
+            }
+            catch { }
+
             _driver = null;
             Log("Navigateur fermé.");
         }
@@ -475,6 +600,7 @@ public class SeleniumService : IDisposable
     public event Action<string>? OnLog;
     public string RechercheParDefaut { get; set; } = "Programmation C#";
     public string VilleParDefaut { get; set; } = "Paris";
+    public string? CheminChromeDriver { get; set; } = null;
 
     private void Log(string message) => OnLog?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}");
 
