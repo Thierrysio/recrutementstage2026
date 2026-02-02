@@ -1,0 +1,11 @@
+# =============================================================================
+# DÉPENDANCES POUR L'ATELIER SELENIUM
+# =============================================================================
+# Installation : pip install -r requirements.txt
+# =============================================================================
+
+# Selenium - Automatisation de navigateur
+selenium>=4.15.0
+
+# Webdriver Manager - Gestion automatique des drivers
+webdriver-manager>=4.0.0
